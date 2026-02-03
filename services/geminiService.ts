@@ -3,6 +3,28 @@ import { Observation, AnalysisResponse, WeatherData } from '../types';
 import { LOCATION_CONTEXT } from '../constants';
 import { fetchWeatherHistory } from './weatherService';
 
+// Helper for retry logic
+async function generateWithRetry(ai: GoogleGenAI, params: any, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (error: any) {
+      // Check for quota exhaustion (429) or server errors (5xx)
+      const isQuota = error.status === 429 || error.message?.includes('429') || error.message?.includes('quota');
+      const isServer = error.status >= 500;
+      
+      if ((isQuota || isServer) && i < retries - 1) {
+        // Exponential backoff: 2s, 4s, 8s
+        const delay = 2000 * Math.pow(2, i);
+        console.warn(`Gemini API error (Status: ${error.status}). Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 const getContextString = (data: Observation[], weather: WeatherData[]): string => {
   const sortedData = data.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   
@@ -105,8 +127,10 @@ export const analyzeData = async (data: Observation[]): Promise<AnalysisResponse
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+    
+    // Switch to gemini-3-flash-preview for better quota limits and wrap in retry logic
+    const response = await generateWithRetry(ai, {
+      model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -114,7 +138,7 @@ export const analyzeData = async (data: Observation[]): Promise<AnalysisResponse
       }
     });
     
-    if (response.text) {
+    if (response && response.text) {
         let cleanText = response.text.trim();
         // Handle potential markdown wrapping
         if (cleanText.startsWith('```')) {
@@ -161,7 +185,8 @@ export const askSpecificQuestion = async (data: Observation[], question: string)
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
+    // Also use retry logic here
+    const response = await generateWithRetry(ai, {
       model: 'gemini-3-flash-preview',
       contents: prompt,
     });
