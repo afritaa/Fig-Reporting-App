@@ -115,7 +115,13 @@ export const analyzeData = async (data: Observation[]): Promise<AnalysisResponse
     });
     
     if (response.text) {
-        const result = JSON.parse(response.text);
+        let cleanText = response.text.trim();
+        // Handle potential markdown wrapping
+        if (cleanText.startsWith('```')) {
+            cleanText = cleanText.replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+        }
+        
+        const result = JSON.parse(cleanText);
         return {
             ...result,
             timestamp: Date.now()
